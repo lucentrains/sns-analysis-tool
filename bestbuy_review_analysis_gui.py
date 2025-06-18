@@ -7,11 +7,12 @@ Streamlit GUI to aggregate and visualize tagged sentiment data from BestBuy revi
 2. タグ別感情割合のモデル比較＋Excel「Tag_Ratios」シート
 3. 日本語タイトルが文字化けしないようフォント自動設定
    - IPAexGothic / Noto Sans CJK JP / Yu Gothic / MS Gothic の順で検出
+4. ★モデルごとの総レビュー件数をテーブル＆グラフに表示
+5. ★件数ラベルを “棒の最上端（≒100%）” に必ず配置   ← New!
 """
 
 # ---------------------------------------------------------------------------
 # Matplotlib 日本語フォント自動セットアップ
-# （Streamlit を呼ぶ前に完結させる）
 # ---------------------------------------------------------------------------
 import matplotlib as mpl
 import matplotlib.font_manager as fm
@@ -25,7 +26,6 @@ _FONT_CANDS = [
 
 
 def _pick_jp_font() -> str | None:
-    """システム上に存在する候補フォントを返す（無ければ None）。"""
     avail = {f.name for f in fm.fontManager.ttflist}
     for cand in _FONT_CANDS:
         if cand in avail:
@@ -53,11 +53,10 @@ from openpyxl import load_workbook
 from openpyxl.drawing.image import Image as XLImage
 
 # ---------------------------------------------------------------------------
-# Streamlit ページ設定（**最初の Streamlit 呼び出し**）
+# Streamlit ページ設定
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="BestBuy Review Analyzer", layout="centered")
 
-# ページヘッダ
 st.title("📊 BestBuy Review Analyzer")
 st.markdown(
     "CSV ファイルを複数選択すると、タグ別感情・評価分布などを自動集計します。<br>"
@@ -65,10 +64,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# フォントが見つからなかった場合に警告
 if _MISSING_FONT:
     st.warning(
-        "日本語フォントがシステムに見つかりません。グラフの日本語が文字化けする場合は "
+        "日本語フォントがシステムに見つかりません。グラフが文字化けする場合は "
         "`sudo apt-get install fonts-noto-cjk` などで追加してください。"
     )
 
@@ -89,7 +87,10 @@ if not uploaded_files:
 # モデル名抽出ヘルパ
 # ---------------------------------------------------------------------------
 MAX_TOKENS = 5
-STOPWORDS = {"eval", "evaluation", "result", "results", "analysis", "analyze", "output"}
+STOPWORDS = {
+    "eval", "evaluation", "result", "results",
+    "analysis", "analyze", "output"
+}
 
 
 def derive_model_name(filename: str) -> str:
@@ -126,7 +127,7 @@ for uf in uploaded_files:
         dup_counter[base] = 1
     model_names[uf.name] = base
 
-    uf.seek(0)  # Excel 出力用にポインタ巻き戻し
+    uf.seek(0)  # Excel 用にポインタ巻き戻し
 
 all_data = pd.concat(file_dfs.values(), ignore_index=True)
 available_tags = [c for c in TAG_COLUMNS if c in all_data.columns]
@@ -149,9 +150,10 @@ def calc_ratio_df(files: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         ratios = {}
         for tag in available_tags:
             cnt = df[tag].value_counts().reindex(SENTIMENTS, fill_value=0)
-            total = cnt.sum() or 1
+            total = int(cnt.sum()) or 1
             for s in SENTIMENTS:
                 ratios[f"{tag}_{s}"] = round(cnt[s] / total * 100, 2)
+        ratios["TotalReviews"] = len(df)
         rows[model_names[fname]] = ratios
     return pd.DataFrame.from_dict(rows, orient="index")
 
@@ -206,20 +208,39 @@ for tab, (fname, df) in zip(tabs[start_idx:], file_dfs.items()):
         render_single(df)
 
 # ---------------------------------------------------------------------------
-# モデル比較 (感情割合)
+# モデル比較 (感情割合 + 件数)
 # ---------------------------------------------------------------------------
-st.header("モデル比較: タグ別スコア割合 (Pos/Neu/Neg)")
+st.header("モデル比較: タグ別スコア割合 (Pos/Neu/Neg) + 件数")
 chosen_tag = st.selectbox("比較したいタグ", available_tags)
 
-view = ratio_df[[f"{chosen_tag}_{s}" for s in SENTIMENTS]].copy()
-view.columns = SENTIMENTS
+view = ratio_df[[f"{chosen_tag}_{s}" for s in SENTIMENTS] + ["TotalReviews"]].copy()
+view.columns = SENTIMENTS + ["Reviews"]
 st.dataframe(view)
 
 fig_cmp, ax_cmp = plt.subplots()
-view.plot(kind="bar", stacked=True, ax=ax_cmp)
+view[SENTIMENTS].plot(kind="bar", stacked=True, ax=ax_cmp)
 ax_cmp.set_ylabel("Percentage (%)")
-ax_cmp.set_title(f"{chosen_tag}: スコア比較")
+ax_cmp.set_title(f"{chosen_tag}")
 ax_cmp.legend(title="Sentiment", bbox_to_anchor=(1.05, 1), loc="upper left")
+
+# ------------------------------------------------------------------
+# ★ 件数ラベルを “棒の最上端” に描画
+# ------------------------------------------------------------------
+# Positive 部分の Rect で x 位置を取得
+pos_rects = ax_cmp.containers[0]
+for rect, total in zip(pos_rects, view["Reviews"]):
+    x_center = rect.get_x() + rect.get_width() / 2
+    ax_cmp.text(
+        x_center,
+        100 + 1,                  # 100% の少し上に固定配置
+        f"{int(total)}",
+        ha="center",
+        va="bottom",
+        fontsize=8,
+    )
+# 余白確保
+ax_cmp.set_ylim(0, 105)
+
 st.pyplot(fig_cmp)
 
 # ---------------------------------------------------------------------------
