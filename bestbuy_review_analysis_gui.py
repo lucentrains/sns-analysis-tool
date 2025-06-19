@@ -47,6 +47,20 @@ from openpyxl import load_workbook
 from openpyxl.drawing.image import Image as XLImage
 
 # ---------------------------------------------------------------------------
+# Excel-Injection 回避ユーティリティ
+# ---------------------------------------------------------------------------
+def _escape_excel_formula(val):
+    if isinstance(val, str) and val and val[0] in ("=", "+", "-", "@"):
+        return "'" + val
+    return val
+
+
+def _safe_df(df: pd.DataFrame) -> pd.DataFrame:
+    """DataFrame を Excel に書く前に安全化"""
+    return df.applymap(_escape_excel_formula)
+
+
+# ---------------------------------------------------------------------------
 # Streamlit ページ設定
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="BestBuy Review Analyzer", layout="centered")
@@ -171,7 +185,7 @@ def build_tag_ratio_long(files: Dict[str, pd.DataFrame]) -> pd.DataFrame:
                         "Tag": tag,
                         "Sentiment": s,
                         "Ratio(%)": round(cnt[s] / total * 100, 2),
-                        "Reviews": int(cnt[s]),
+                        "Reviews": int(cnt[s]),  # 極性別件数
                     }
                 )
     return pd.DataFrame(records)
@@ -246,7 +260,7 @@ chosen_tag = st.selectbox("比較したいタグ", available_tags)
 
 view = tag_ratio_long_df[tag_ratio_long_df["Tag"] == chosen_tag]
 pivot_view = view.pivot(index="Model", columns="Sentiment", values="Ratio(%)")
-reviews_map = view.groupby("Model")["Reviews"].first()
+reviews_map = view.groupby("Model")["Reviews"].sum()  # ★合計に変更
 pivot_view["Reviews"] = pivot_view.index.map(reviews_map).astype(int)
 pivot_view = pivot_view[SENTIMENTS + ["Reviews"]]
 
@@ -292,25 +306,25 @@ st.header("Excel エクスポート")
 buf = io.BytesIO()
 with pd.ExcelWriter(buf, engine="openpyxl") as writer:
     # メインシート
-    build_tag_summary(all_data).to_excel(writer, sheet_name="Tag_Summary_All")
-    ratio_df.to_excel(writer, sheet_name="Tag_Ratios")
-    tag_ratio_long_df.to_excel(writer, sheet_name="Tag_Ratios_Long", index=False)
-    filtered.to_excel(writer, sheet_name="Filtered_Reviews", index=False)
+    _safe_df(build_tag_summary(all_data)).to_excel(writer, sheet_name="Tag_Summary_All")
+    _safe_df(ratio_df).to_excel(writer, sheet_name="Tag_Ratios")
+    _safe_df(tag_ratio_long_df).to_excel(writer, sheet_name="Tag_Ratios_Long", index=False)
+    _safe_df(filtered).to_excel(writer, sheet_name="Filtered_Reviews", index=False)
 
     # タグ別比較シート
     for tag in available_tags:
         sheet_name = f"Tag_{tag[:25]}"
         tag_df = tag_ratio_long_df[tag_ratio_long_df["Tag"] == tag]
         pv = tag_df.pivot(index="Model", columns="Sentiment", values="Ratio(%)")
-        reviews_map = tag_df.groupby("Model")["Reviews"].first()
+        reviews_map = tag_df.groupby("Model")["Reviews"].sum()
         pv["Reviews"] = pv.index.map(reviews_map).astype(int)
         pv = pv[SENTIMENTS + ["Reviews"]]
-        pv.to_excel(writer, sheet_name=sheet_name)
+        _safe_df(pv).to_excel(writer, sheet_name=sheet_name)
 
     # 個別モデル集計シート
     for fname, df in file_dfs.items():
         sheet_name = f"{model_names[fname][:28]}_集計"
-        build_tag_summary(df).to_excel(writer, sheet_name=sheet_name)
+        _safe_df(build_tag_summary(df)).to_excel(writer, sheet_name=sheet_name)
 
 buf.seek(0)
 wb = load_workbook(buf)
@@ -320,7 +334,7 @@ wb = load_workbook(buf)
 # ---------------------------------------------------------------------------
 def _add_image(ws, img_data: bytes, cell: str, width: int, height: int):
     img = XLImage(img_data)
-    img._id = None  # ★ 重複 rId 回避
+    img._id = None  # 重複 rId 回避
     img._name = f"Pic_{uuid4().hex[:8]}"
     img.width, img.height = width, height
     ws.add_image(img, cell)
@@ -351,7 +365,7 @@ for tag in available_tags:
     ws = wb[sheet]
     tag_df = tag_ratio_long_df[tag_ratio_long_df["Tag"] == tag]
     pv = tag_df.pivot(index="Model", columns="Sentiment", values="Ratio(%)")
-    reviews_map = tag_df.groupby("Model")["Reviews"].first()
+    reviews_map = tag_df.groupby("Model")["Reviews"].sum()
     pv["Reviews"] = pv.index.map(reviews_map).astype(int)
     pv = pv[SENTIMENTS + ["Reviews"]]
 
