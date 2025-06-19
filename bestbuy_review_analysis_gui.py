@@ -176,20 +176,6 @@ def render_single(df: pd.DataFrame):
     ax.legend(title="Sentiment")
     st.pyplot(fig)
 
-    if "overall_sentiment_score" in df.columns:
-        st.subheader("overall_sentiment_score の統計")
-        series = df["overall_sentiment_score"].dropna().astype(float)
-        st.write({"平均": series.mean(), "中央値": series.median(), "件数": len(series)})
-        fig2, ax2 = plt.subplots()
-        ax2.hist(series, bins=20)
-        ax2.set_xlabel("overall_sentiment_score")
-        ax2.set_ylabel("Frequency")
-        st.pyplot(fig2)
-
-    if "rating" in df.columns:
-        st.subheader("Rating (星) 分布")
-        st.bar_chart(df["rating"].astype(int).value_counts().sort_index())
-
 
 tabs = st.tabs(
     (["All Files"] if len(file_dfs) > 1 else [])
