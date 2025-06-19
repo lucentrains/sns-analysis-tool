@@ -153,7 +153,7 @@ def calc_ratio_df(files: Dict[str, pd.DataFrame]) -> pd.DataFrame:
             total = int(cnt.sum()) or 1
             for s in SENTIMENTS:
                 ratios[f"{tag}_{s}"] = round(cnt[s] / total * 100, 2)
-        ratios["TotalReviews"] = len(df)
+            ratios[f"{tag}_Reviews"] = int(cnt.sum())
         rows[model_names[fname]] = ratios
     return pd.DataFrame.from_dict(rows, orient="index")
 
@@ -200,7 +200,7 @@ for tab, (fname, df) in zip(tabs[start_idx:], file_dfs.items()):
 st.header("モデル比較: タグ別スコア割合 (Pos/Neu/Neg) + 件数")
 chosen_tag = st.selectbox("比較したいタグ", available_tags)
 
-view = ratio_df[[f"{chosen_tag}_{s}" for s in SENTIMENTS] + ["TotalReviews"]].copy()
+view = ratio_df[[f"{chosen_tag}_{s}" for s in SENTIMENTS] + [f"{chosen_tag}_Reviews"]].copy()
 view.columns = SENTIMENTS + ["Reviews"]
 
 with st.expander("モデル比較表（タグ別スコア割合 + 件数）", expanded=False):
