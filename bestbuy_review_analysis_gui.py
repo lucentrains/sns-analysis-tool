@@ -202,7 +202,9 @@ chosen_tag = st.selectbox("比較したいタグ", available_tags)
 
 view = ratio_df[[f"{chosen_tag}_{s}" for s in SENTIMENTS] + ["TotalReviews"]].copy()
 view.columns = SENTIMENTS + ["Reviews"]
-st.dataframe(view)
+
+with st.expander("モデル比較表（タグ別スコア割合 + 件数）", expanded=False):
+    st.dataframe(view)
 
 fig_cmp, ax_cmp = plt.subplots()
 view[SENTIMENTS].plot(kind="bar", stacked=True, ax=ax_cmp)
