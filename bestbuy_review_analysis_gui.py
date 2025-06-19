@@ -166,7 +166,8 @@ ratio_df = calc_ratio_df(file_dfs)
 def render_single(df: pd.DataFrame):
     tbl = build_tag_summary(df)
     st.subheader("タグ別 ポジ/ネガ/ニュートラル 件数")
-    st.dataframe(tbl)
+    with st.expander("タグ別 ポジ/ネガ/ニュートラル 件数（表）", expanded=False):
+        st.dataframe(tbl)
 
     st.subheader("タグ別ヒストグラム")
     fig, ax = plt.subplots()
