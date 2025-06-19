@@ -6,23 +6,17 @@ Streamlit GUI to aggregate and visualize tagged sentiment data from BestBuy revi
 1. タブ切り替えで各モデル＆全体集計を閲覧
 2. タグ別感情割合のモデル比較＋Excel「Tag_Ratios」シート
 3. 日本語タイトルが文字化けしないようフォント自動設定
-   - IPAexGothic / Noto Sans CJK JP / Yu Gothic / MS Gothic の順で検出
 4. ★モデルごとの総レビュー件数をテーブル＆グラフに表示
-5. ★件数ラベルを “棒の最上端（≒100%）” に必ず配置   ← New!
+5. ★件数ラベルを“棒の最上端（≒100%）”に配置
 """
 
 # ---------------------------------------------------------------------------
-# Matplotlib 日本語フォント自動セットアップ
+# 日本語フォント自動セットアップ (matplotlib)
 # ---------------------------------------------------------------------------
 import matplotlib as mpl
 import matplotlib.font_manager as fm
 
-_FONT_CANDS = [
-    "IPAexGothic",
-    "Noto Sans CJK JP",
-    "Yu Gothic",
-    "MS Gothic",
-]
+_FONT_CANDS = ["IPAexGothic", "Noto Sans CJK JP", "Yu Gothic", "MS Gothic"]
 
 
 def _pick_jp_font() -> str | None:
@@ -34,17 +28,17 @@ def _pick_jp_font() -> str | None:
 
 
 _SELECTED_FONT = _pick_jp_font()
-_MISSING_FONT = _SELECTED_FONT is None
 if _SELECTED_FONT:
     mpl.rcParams["font.family"] = _SELECTED_FONT
     mpl.rcParams["axes.unicode_minus"] = False  # − を正しく表示
 
 # ---------------------------------------------------------------------------
-# 主要ライブラリ
+# 標準ライブラリ & サードパーティ
 # ---------------------------------------------------------------------------
 import io
 from datetime import datetime
 from typing import Dict, List
+from uuid import uuid4
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -64,9 +58,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if _MISSING_FONT:
+if not _SELECTED_FONT:
     st.warning(
-        "日本語フォントがシステムに見つかりません。グラフが文字化けする場合は "
+        "日本語フォントが見つかりません。グラフが文字化けする場合は "
         "`sudo apt-get install fonts-noto-cjk` などで追加してください。"
     )
 
@@ -74,13 +68,10 @@ if _MISSING_FONT:
 # ファイルアップローダ
 # ---------------------------------------------------------------------------
 uploaded_files = st.file_uploader(
-    "解析したい CSV を選択 (複数可)",
-    type="csv",
-    accept_multiple_files=True,
+    "解析したい CSV を選択 (複数可)", type="csv", accept_multiple_files=True
 )
-
 if not uploaded_files:
-    st.info("左サイドバーまたは上のボタンから CSV をアップロードしてください。")
+    st.info("CSV をアップロードしてください。")
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -88,8 +79,13 @@ if not uploaded_files:
 # ---------------------------------------------------------------------------
 MAX_TOKENS = 5
 STOPWORDS = {
-    "eval", "evaluation", "result", "results",
-    "analysis", "analyze", "output"
+    "eval",
+    "evaluation",
+    "result",
+    "results",
+    "analysis",
+    "analyze",
+    "output",
 }
 
 
@@ -97,15 +93,22 @@ def derive_model_name(filename: str) -> str:
     stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("-", "_")
     tokens = [t for t in stem.split("_") if t and t.lower() not in STOPWORDS]
     short = "_".join(tokens[:MAX_TOKENS]) or stem
-    return short[:30]  # Excel シート名制限対策
+    return short[:30]  # Excel シート名 31 文字制限
 
 
 # ---------------------------------------------------------------------------
 # ファイル読込 & 前処理
 # ---------------------------------------------------------------------------
 TAG_COLUMNS: List[str] = [
-    "SoundQuality", "Music", "Movies", "Surround",
-    "Dialogue", "Bass", "App", "Setup", "Design",
+    "SoundQuality",
+    "Music",
+    "Movies",
+    "Surround",
+    "Dialogue",
+    "Bass",
+    "App",
+    "Setup",
+    "Design",
 ]
 SENTIMENTS = ["Positive", "Neutral", "Negative"]
 
@@ -120,20 +123,16 @@ for uf in uploaded_files:
     file_dfs[uf.name] = df
 
     base = derive_model_name(uf.name)
-    if base in dup_counter:
-        dup_counter[base] += 1
-        base = f"{base}-{dup_counter[base]}"
-    else:
-        dup_counter[base] = 1
-    model_names[uf.name] = base
+    dup_counter[base] = dup_counter.get(base, 0) + 1
+    model_names[uf.name] = base if dup_counter[base] == 1 else f"{base}-{dup_counter[base]}"
 
-    uf.seek(0)  # Excel 用にポインタ巻き戻し
+    uf.seek(0)  # Excel 書き出し用にポインタ巻き戻し
 
 all_data = pd.concat(file_dfs.values(), ignore_index=True)
 available_tags = [c for c in TAG_COLUMNS if c in all_data.columns]
 
 # ---------------------------------------------------------------------------
-# ユーティリティ
+# 集計関数
 # ---------------------------------------------------------------------------
 def build_tag_summary(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
@@ -158,18 +157,64 @@ def calc_ratio_df(files: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame.from_dict(rows, orient="index")
 
 
-ratio_df = calc_ratio_df(file_dfs)
+def build_tag_ratio_long(files: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    records = []
+    for fname, df in files.items():
+        model = model_names[fname]
+        for tag in available_tags:
+            cnt = df[tag].value_counts().reindex(SENTIMENTS, fill_value=0)
+            total = int(cnt.sum()) or 1
+            for s in SENTIMENTS:
+                records.append(
+                    {
+                        "Model": model,
+                        "Tag": tag,
+                        "Sentiment": s,
+                        "Ratio(%)": round(cnt[s] / total * 100, 2),
+                        "Reviews": int(cnt[s]),
+                    }
+                )
+    return pd.DataFrame(records)
+
+
+def build_tag_ratio_long_all(files, all_data) -> pd.DataFrame:
+    df_long = build_tag_ratio_long(files)
+    for tag in available_tags:
+        cnt = all_data[tag].value_counts().reindex(SENTIMENTS, fill_value=0)
+        total = int(cnt.sum()) or 1
+        for s in SENTIMENTS:
+            df_long.loc[len(df_long)] = {
+                "Model": "All_Files",
+                "Tag": tag,
+                "Sentiment": s,
+                "Ratio(%)": round(cnt[s] / total * 100, 2),
+                "Reviews": int(cnt[s]),
+            }
+    return df_long
+
+
+@st.cache_data(show_spinner=False)
+def cached_ratio_df(files):
+    return calc_ratio_df(files)
+
+
+@st.cache_data(show_spinner=False)
+def cached_long_df(files, all_data):
+    return build_tag_ratio_long_all(files, all_data)
+
+
+ratio_df = cached_ratio_df(file_dfs)
+tag_ratio_long_df = cached_long_df(file_dfs, all_data)
 
 # ---------------------------------------------------------------------------
-# 個別解析表示 (タブ)
+# 個別解析タブ
 # ---------------------------------------------------------------------------
 def render_single(df: pd.DataFrame):
     tbl = build_tag_summary(df)
     st.subheader("タグ別 ポジ/ネガ/ニュートラル 件数")
-    with st.expander("タグ別 ポジ/ネガ/ニュートラル 件数（表）", expanded=False):
+    with st.expander("表を表示", expanded=False):
         st.dataframe(tbl)
 
-    st.subheader("タグ別ヒストグラム")
     fig, ax = plt.subplots()
     tbl.plot(kind="bar", stacked=True, ax=ax)
     ax.set_xlabel("Tag")
@@ -179,8 +224,7 @@ def render_single(df: pd.DataFrame):
 
 
 tabs = st.tabs(
-    (["All Files"] if len(file_dfs) > 1 else [])
-    + [model_names[f] for f in file_dfs.keys()]
+    (["All Files"] if len(file_dfs) > 1 else []) + [model_names[f] for f in file_dfs]
 )
 
 if len(file_dfs) > 1:
@@ -195,39 +239,29 @@ for tab, (fname, df) in zip(tabs[start_idx:], file_dfs.items()):
         render_single(df)
 
 # ---------------------------------------------------------------------------
-# モデル比較 (感情割合 + 件数)
+# モデル比較グラフ
 # ---------------------------------------------------------------------------
 st.header("モデル比較: タグ別スコア割合 (Pos/Neu/Neg) + 件数")
 chosen_tag = st.selectbox("比較したいタグ", available_tags)
 
-view = ratio_df[[f"{chosen_tag}_{s}" for s in SENTIMENTS] + [f"{chosen_tag}_Reviews"]].copy()
-view.columns = SENTIMENTS + ["Reviews"]
+view = tag_ratio_long_df[tag_ratio_long_df["Tag"] == chosen_tag]
+pivot_view = view.pivot(index="Model", columns="Sentiment", values="Ratio(%)")
+reviews_map = view.groupby("Model")["Reviews"].first()
+pivot_view["Reviews"] = pivot_view.index.map(reviews_map).astype(int)
+pivot_view = pivot_view[SENTIMENTS + ["Reviews"]]
 
-with st.expander("モデル比較表（タグ別スコア割合 + 件数）", expanded=False):
-    st.dataframe(view)
+with st.expander("比較表を表示", expanded=False):
+    st.dataframe(pivot_view)
 
 fig_cmp, ax_cmp = plt.subplots()
-view[SENTIMENTS].plot(kind="bar", stacked=True, ax=ax_cmp)
+pivot_view[SENTIMENTS].plot(kind="bar", stacked=True, ax=ax_cmp)
 ax_cmp.set_ylabel("Percentage (%)")
-ax_cmp.set_title(f"{chosen_tag}")
+ax_cmp.set_title(chosen_tag)
 ax_cmp.legend(title="Sentiment", bbox_to_anchor=(1.05, 1), loc="upper left")
 
-# ------------------------------------------------------------------
-# ★ 件数ラベルを “棒の最上端” に描画
-# ------------------------------------------------------------------
-# Positive 部分の Rect で x 位置を取得
-pos_rects = ax_cmp.containers[0]
-for rect, total in zip(pos_rects, view["Reviews"]):
+for rect, total in zip(ax_cmp.containers[0], pivot_view["Reviews"]):
     x_center = rect.get_x() + rect.get_width() / 2
-    ax_cmp.text(
-        x_center,
-        100 + 1,                  # 100% の少し上に固定配置
-        f"{int(total)}",
-        ha="center",
-        va="bottom",
-        fontsize=8,
-    )
-# 余白確保
+    ax_cmp.text(x_center, 101, f"{int(total)}", ha="center", va="bottom", fontsize=8)
 ax_cmp.set_ylim(0, 105)
 
 st.pyplot(fig_cmp)
@@ -236,7 +270,7 @@ st.pyplot(fig_cmp)
 # キーワード検索
 # ---------------------------------------------------------------------------
 st.header("キーワード検索 / フィルタ (All Files)")
-kw = st.text_input("含めたいキーワード (複数語はスペース区切り)")
+kw = st.text_input("含めたいキーワード (スペース区切り可)")
 if kw:
     mask = (
         all_data["review_text"].astype(str).str.contains(kw, case=False, na=False)
@@ -251,66 +285,94 @@ else:
     filtered = all_data
 
 # ---------------------------------------------------------------------------
-# Excel 出力
+# Excel エクスポート
 # ---------------------------------------------------------------------------
 st.header("Excel エクスポート")
 
-tag_summary_all = build_tag_summary(all_data)
-sentiment_all = (
-    all_data["overall_sentiment_score"].dropna().astype(float)
-    if "overall_sentiment_score" in all_data.columns
-    else pd.Series(dtype=float)
-)
-rating_all = (
-    all_data["rating"].astype(int).value_counts().sort_index()
-    if "rating" in all_data.columns
-    else pd.Series(dtype=int)
-)
-
 buf = io.BytesIO()
 with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-    tag_summary_all.to_excel(writer, sheet_name="Tag_Summary_All")
+    # メインシート
+    build_tag_summary(all_data).to_excel(writer, sheet_name="Tag_Summary_All")
     ratio_df.to_excel(writer, sheet_name="Tag_Ratios")
-    if not sentiment_all.empty:
-        sentiment_all.to_frame("overall_sentiment_score").to_excel(
-            writer, sheet_name="Sentiment_Score_All"
-        )
-    if not rating_all.empty:
-        rating_all.to_frame("count").to_excel(
-            writer, sheet_name="Rating_Distribution_All"
-        )
+    tag_ratio_long_df.to_excel(writer, sheet_name="Tag_Ratios_Long", index=False)
     filtered.to_excel(writer, sheet_name="Filtered_Reviews", index=False)
 
+    # タグ別比較シート
+    for tag in available_tags:
+        sheet_name = f"Tag_{tag[:25]}"
+        tag_df = tag_ratio_long_df[tag_ratio_long_df["Tag"] == tag]
+        pv = tag_df.pivot(index="Model", columns="Sentiment", values="Ratio(%)")
+        reviews_map = tag_df.groupby("Model")["Reviews"].first()
+        pv["Reviews"] = pv.index.map(reviews_map).astype(int)
+        pv = pv[SENTIMENTS + ["Reviews"]]
+        pv.to_excel(writer, sheet_name=sheet_name)
+
+    # 個別モデル集計シート
     for fname, df in file_dfs.items():
         sheet_name = f"{model_names[fname][:28]}_集計"
         build_tag_summary(df).to_excel(writer, sheet_name=sheet_name)
 
-# グラフ貼り付け
 buf.seek(0)
 wb = load_workbook(buf)
+
+# ---------------------------------------------------------------------------
+# 画像貼付けユーティリティ
+# ---------------------------------------------------------------------------
+def _add_image(ws, img_data: bytes, cell: str, width: int, height: int):
+    img = XLImage(img_data)
+    img._id = None  # ★ 重複 rId 回避
+    img._name = f"Pic_{uuid4().hex[:8]}"
+    img.width, img.height = width, height
+    ws.add_image(img, cell)
+
+
+# 個別モデルのヒストグラム画像
 for fname, df in file_dfs.items():
     sheet = f"{model_names[fname][:28]}_集計"
     if sheet not in wb.sheetnames:
         continue
     ws = wb[sheet]
-
     fig, ax = plt.subplots()
     build_tag_summary(df).plot(kind="bar", stacked=True, ax=ax)
     ax.set_xlabel("Tag")
     ax.set_ylabel("Count")
     ax.legend(title="Sentiment")
+    img_data = io.BytesIO()
+    fig.savefig(img_data, format="png", bbox_inches="tight")
+    plt.close(fig)
+    img_data.seek(0)
+    _add_image(ws, img_data, "H2", 480, 320)
+
+# タグ別比較グラフ
+for tag in available_tags:
+    sheet = f"Tag_{tag[:25]}"
+    if sheet not in wb.sheetnames:
+        continue
+    ws = wb[sheet]
+    tag_df = tag_ratio_long_df[tag_ratio_long_df["Tag"] == tag]
+    pv = tag_df.pivot(index="Model", columns="Sentiment", values="Ratio(%)")
+    reviews_map = tag_df.groupby("Model")["Reviews"].first()
+    pv["Reviews"] = pv.index.map(reviews_map).astype(int)
+    pv = pv[SENTIMENTS + ["Reviews"]]
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    pv[SENTIMENTS].plot(kind="bar", stacked=True, ax=ax)
+    ax.set_ylabel("Percentage (%)")
+    ax.set_title(tag)
+    ax.legend(title="Sentiment", bbox_to_anchor=(1.05, 1), loc="upper left")
+    for rect, total in zip(ax.containers[0], pv["Reviews"]):
+        x_center = rect.get_x() + rect.get_width() / 2
+        ax.text(x_center, 101, f"{int(total)}", ha="center", va="bottom", fontsize=8)
+    ax.set_ylim(0, 105)
+    fig.tight_layout()
 
     img_data = io.BytesIO()
     fig.savefig(img_data, format="png", bbox_inches="tight")
     plt.close(fig)
     img_data.seek(0)
+    _add_image(ws, img_data, "H2", 800, 600)
 
-    img = XLImage(img_data)
-    img.width = 480
-    img.height = 320
-    ws.add_image(img, "H2")
-
-# ダウンロード
+# 保存
 out = io.BytesIO()
 wb.save(out)
 out.seek(0)
